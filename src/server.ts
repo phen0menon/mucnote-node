@@ -1,26 +1,49 @@
+import { ApolloServer } from 'apollo-server-express';
 import dotenv from 'dotenv';
 import express from 'express';
-import cors from 'cors';
-import compression from 'compression';
-import depthLimit from 'graphql-depth-limit';
-import { ApolloServer } from 'apollo-server-express';
-import { createServer } from 'http';
-import schema from './schema';
+import chalk from 'chalk';
+import typeDefs from './typeDefs';
+import resolvers from './resolvers';
+
+import mongoose from 'mongoose';
+
+import { appPort, isDev, configEssentials } from './config';
 
 dotenv.config();
 
-const port = process.env.SERVER_PORT || 3000;
-const app = express();
-const server = new ApolloServer({
-  schema,
-  validationRules: [depthLimit(7)],
-});
+type mongoConfigProperties = { [key in typeof configEssentials[number]]: string };
 
-app.use('*', cors());
-app.use(compression());
-server.applyMiddleware({ app, path: '/graphql' });
+const getDatabaseConfig = (): mongoConfigProperties =>
+  configEssentials.reduce((result, current) => {
+    if (!current) console.error(`Configuration property ${current} is not specified`);
+    return { ...result, [current]: process.env[current] };
+  }, {} as mongoConfigProperties);
 
-const httpServer = createServer(app);
-httpServer.listen({ port }, () => {
-  console.log(`Dev server is listening on ${port}`);
-});
+const establishMongoConnection = (config: mongoConfigProperties) =>
+  mongoose.connect(
+    `mongodb+srv://${config.MONGO_USERNAME}:${config.MONGO_PASSWORD}@${config.MONGO_HOST}:${config.MONGO_PORT}/${config.MONGO_NAME}`,
+    { useNewUrlParser: true }
+  );
+
+(async () => {
+  try {
+    await establishMongoConnection(getDatabaseConfig());
+
+    const app = express();
+    app.disable('x-powered-by');
+
+    const apolloServer = new ApolloServer({
+      typeDefs,
+      resolvers,
+      playground: isDev,
+    });
+
+    apolloServer.applyMiddleware({ app });
+
+    app.listen({ port: appPort }, () => {
+      console.log(chalk.green(`Listening http://localhost:${appPort}${apolloServer.graphqlPath}`));
+    });
+  } catch (e) {
+    console.error(e);
+  }
+})();
